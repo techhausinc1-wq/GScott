@@ -3286,14 +3286,22 @@ async function syncToSheets(){
 document.getElementById('run-btn').addEventListener('click',runAgent);
 async function runAgent(){
  const state=document.getElementById('state-select').value,zip=document.getElementById('zip-input').value.trim();
- const radius=document.getElementById('radius-input').value,unit=document.getElementById('unit-select').value;
+ // Defensive: guard against blank, non-numeric, or negative radius — default to 20 mi.
+ // Cap the display at 3000 so the prompt to Fred doesn't say something nonsensical.
+ let radiusRaw = document.getElementById('radius-input').value;
+ let radiusNum = parseInt(radiusRaw, 10);
+ if (!Number.isFinite(radiusNum) || radiusNum < 1) radiusNum = 20;
+ if (radiusNum > 3000) radiusNum = 3000;
+ const radius = String(radiusNum);
+ const unit = document.getElementById('unit-select').value || 'Miles';
  const depth=parseInt(document.getElementById('depth-select').value),priority=document.getElementById('priority-select').value;
  if(!state){alert('Please select a state.');return;}if(!zip){alert('Please enter a ZIP code.');return;}
  const checkedTypes=[...document.querySelectorAll('.check-item.checked')].map(el=>el.dataset.type);
  if(!checkedTypes.length){alert('Please select at least one business type.');return;}
- // Warn when too many types selected — too broad = slow agent + likely fetch failure
- if(checkedTypes.length>=7){
-   if(!confirm(`You have ${checkedTypes.length} business types selected. Wide scans take 2–4 minutes and sometimes time out. Run anyway, or cancel and narrow to 3–5 types first?`)){
+ // Very wide scans (10+ types) may return fewer per-type results — quick heads-up.
+ // Scans themselves are fast (Haiku, ~25-40s even at max breadth).
+ if(checkedTypes.length>=10){
+   if(!confirm(`You have ${checkedTypes.length} business types selected. Very broad scans sometimes surface fewer per-type results. Run anyway, or cancel to narrow to your top 5–7 types first?`)){
      return;
    }
  }
@@ -3334,7 +3342,9 @@ Search aggressively. Only REAL hospitality venues. Buyer names + titles in notes
  // Progressive search budget: primary attempt fast (Haiku, ~20-30s). If it fails
  // network-side, retry once with an even smaller budget. Cap max_uses at 6 for
  // reliability — the old 15-search scans routinely dropped on flaky Wi-Fi.
- const budgets = checkedTypes.length<=2 ? [6, 3] : checkedTypes.length<=4 ? [5, 3] : [4, 2];
+ // Search budget bumps up for broader scans — capped to avoid network drops but
+ // never below 4 so wide scans (7+ types) still return meaningful lead counts.
+ const budgets = checkedTypes.length<=2 ? [7, 4] : checkedTypes.length<=4 ? [6, 3] : checkedTypes.length<=7 ? [6, 4] : [7, 5];
  let lastErr = null;
  try{
    for(let attempt = 0; attempt < budgets.length; attempt++){
