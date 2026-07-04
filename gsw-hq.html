@@ -2439,21 +2439,23 @@ function renderQuickDiscover(){
 
 
 // ══ FONT-SIZE TOGGLE ════════════════════════════════════════════════════════
-// Almost every text style in this file is hardcoded in pixels, so scaling only
-// the base body font-size never showed on screen. We use browser `zoom` on the
-// app root — Chrome/Safari/Edge (all Chromium) resize every element proportionally.
-// Firefox doesn't support zoom but the target audience is Mac + iPad users.
+// Zoom the .wrap container ONLY — not <body>. Reason: modals, toast, floating
+// bar, coach drawer are position:fixed direct children of body. If we zoom
+// <body>, their `inset:0` gets computed against the zoomed body, so they
+// appear offset and clicks land in the wrong place. Zooming .wrap keeps
+// modals attached to the real viewport and pointer events intact.
 (function(){
   const KEY = 'gsw_font_scale';
   let scale = parseFloat(localStorage.getItem(KEY)) || 1;
   scale = Math.max(0.85, Math.min(1.5, scale));
   const apply = () => {
     document.documentElement.style.setProperty('--gsw-font-scale', scale);
-    // Zoom on body (not html) so header/gate/toast/modals all inherit uniformly.
-    if (document.body) document.body.style.zoom = String(scale);
+    // Reset any leftover body zoom from earlier build in case cache serves it.
+    if (document.body) document.body.style.zoom = '';
+    const wrap = document.querySelector('.wrap');
+    if (wrap) wrap.style.zoom = String(scale);
   };
   apply();
-  // Re-apply after DOM ready in case this ran before <body> was parsed.
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', apply);
   }
