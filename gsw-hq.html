@@ -2439,15 +2439,28 @@ function renderQuickDiscover(){
 
 
 // ══ FONT-SIZE TOGGLE ════════════════════════════════════════════════════════
+// Almost every text style in this file is hardcoded in pixels, so scaling only
+// the base body font-size never showed on screen. We use browser `zoom` on the
+// app root — Chrome/Safari/Edge (all Chromium) resize every element proportionally.
+// Firefox doesn't support zoom but the target audience is Mac + iPad users.
 (function(){
   const KEY = 'gsw_font_scale';
   let scale = parseFloat(localStorage.getItem(KEY)) || 1;
   scale = Math.max(0.85, Math.min(1.5, scale));
-  document.documentElement.style.setProperty('--gsw-font-scale', scale);
+  const apply = () => {
+    document.documentElement.style.setProperty('--gsw-font-scale', scale);
+    // Zoom on body (not html) so header/gate/toast/modals all inherit uniformly.
+    if (document.body) document.body.style.zoom = String(scale);
+  };
+  apply();
+  // Re-apply after DOM ready in case this ran before <body> was parsed.
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', apply);
+  }
   window.setFontScale = function(delta, reset){
     if(reset){ scale = 1; }
     else { scale = Math.max(0.85, Math.min(1.5, scale + delta)); }
-    document.documentElement.style.setProperty('--gsw-font-scale', scale);
+    apply();
     try { localStorage.setItem(KEY, String(scale)); } catch(e){}
   };
 })();
