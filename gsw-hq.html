@@ -2439,21 +2439,24 @@ function renderQuickDiscover(){
 
 
 // ══ FONT-SIZE TOGGLE ════════════════════════════════════════════════════════
-// Zoom the .wrap container ONLY — not <body>. Reason: modals, toast, floating
-// bar, coach drawer are position:fixed direct children of body. If we zoom
-// <body>, their `inset:0` gets computed against the zoomed body, so they
-// appear offset and clicks land in the wrong place. Zooming .wrap keeps
-// modals attached to the real viewport and pointer events intact.
+// Zoom every content view individually — .wrap covers the scout/prospects/
+// manual/products tabs, but view-orders / view-admin / view-today / view-called
+// / view-commissions / view-lookup are siblings OUTSIDE .wrap so they need
+// zoom applied directly. Modals + toast + coach fab stay at 1x since they're
+// position:fixed direct children of body and get their coordinates from the
+// real viewport.
 (function(){
   const KEY = 'gsw_font_scale';
+  const TARGETS = '.wrap, #view-orders, #view-admin, #view-today, #view-called, #view-commissions, #view-lookup';
   let scale = parseFloat(localStorage.getItem(KEY)) || 1;
   scale = Math.max(0.85, Math.min(1.5, scale));
   const apply = () => {
     document.documentElement.style.setProperty('--gsw-font-scale', scale);
     // Reset any leftover body zoom from earlier build in case cache serves it.
     if (document.body) document.body.style.zoom = '';
-    const wrap = document.querySelector('.wrap');
-    if (wrap) wrap.style.zoom = String(scale);
+    document.querySelectorAll(TARGETS).forEach(el => {
+      el.style.zoom = String(scale);
+    });
   };
   apply();
   if (document.readyState === 'loading') {
