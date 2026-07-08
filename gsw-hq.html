@@ -876,7 +876,7 @@ body { font-size: calc(14px * var(--gsw-font-scale)); }
     <div class="main-tab" onclick="switchMainTab('prospects')" id="tab-prospects">Prospects <span class="tab-badge" id="prospects-count">0</span></div>
     <div class="main-tab" onclick="switchMainTab('called')" id="tab-called" style="display:none;">Called <span class="tab-badge" id="called-count">0</span></div>
     <div class="main-tab" onclick="switchMainTab('commissions')" id="tab-commissions" style="display:none;">Commissions</div>
-    <div class="main-tab master-only" onclick="switchMainTab('scott')" id="tab-scott" style="display:none;">Scott's Activity</div>
+    <div class="main-tab master-only" onclick="switchMainTab('scott')" id="tab-scott" style="display:none;">Team Activity</div>
     <div class="main-tab" onclick="switchMainTab('manual')" id="tab-manual">How to use</div>
     <div class="main-tab" onclick="switchMainTab('products')" id="tab-products">Product guide</div>
     <div class="main-tab" onclick="switchMainTab('orders')" id="tab-orders" style="display:none;">Orders</div>
@@ -1222,8 +1222,8 @@ body { font-size: calc(14px * var(--gsw-font-scale)); }
     <div style="padding:18px 0 48px;">
       <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:16px;margin-bottom:16px;">
         <div>
-          <div style="font-family:'Inter',sans-serif;font-size:20px;font-weight:700;">Scott's Activity</div>
-          <div style="font-size:12px;color:var(--text3);margin-top:4px;">Live view of Scott's Google Sheet. Updates when he saves.</div>
+          <div style="font-family:'Inter',sans-serif;font-size:20px;font-weight:700;">Team Activity</div>
+          <div style="font-size:12px;color:var(--text3);margin-top:4px;">Live view of the team Google Sheet — Scott + Vlad's VA. Updates when they save.</div>
         </div>
         <div style="display:flex;gap:8px;align-items:center;">
           <span id="scott-refreshed" style="font-size:11px;color:var(--text3);"></span>
@@ -1261,6 +1261,12 @@ body { font-size: calc(14px * var(--gsw-font-scale)); }
         <div style="padding:14px 18px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;">
           <div style="font-family:'Inter',sans-serif;font-size:14px;font-weight:700;">Scott's Prospect Pipeline</div>
           <div style="display:flex;gap:6px;align-items:center;">
+            <select id="scott-filter-owner" onchange="renderScottTab()" style="padding:6px 10px;border:1px solid var(--border);border-radius:6px;font-size:12px;background:var(--card);">
+              <option value="">All reps</option>
+              <option value="Scott">Scott only</option>
+              <option value="VA">VA only</option>
+              <option value="Vlad">Vlad only</option>
+            </select>
             <select id="scott-filter-status" onchange="renderScottProspects()" style="padding:6px 10px;border:1px solid var(--border);border-radius:6px;font-size:12px;background:var(--card);">
               <option value="">All statuses</option>
             </select>
@@ -3722,12 +3728,44 @@ function renderScottTab(){
   renderScottActivity();
   renderScottProspects();
   renderScottCommissions();
+  renderScottDedupWarning();
+}
+
+// Returns the {prospects, called, commissions} filtered by the Owner dropdown.
+// When "All reps" is selected, returns everything untouched.
+function scottFiltered(){
+  const owner = (document.getElementById('scott-filter-owner')?.value || '').trim();
+  if(!owner) return _scottData;
+  const p = _scottData.prospects.filter(r => (r.Owner || '') === owner);
+  const called = _scottData.called.filter(r => (r['Called By'] || '') === owner);
+  const commissions = _scottData.commissions.filter(r => (r.Rep || '') === owner);
+  return { prospects: p, called, commissions };
+}
+
+// Big red banner at top when the same account is on both reps' Today queues.
+function renderScottDedupWarning(){
+  const p = _scottData.prospects || [];
+  const scottToday = new Set(p.filter(r => (r.Owner==='Scott') && /^x$/i.test(r['Today?']||'')).map(r => r.Account));
+  const vaToday   = new Set(p.filter(r => (r.Owner==='VA')    && /^x$/i.test(r['Today?']||'')).map(r => r.Account));
+  const dupes = [...scottToday].filter(a => vaToday.has(a));
+  const el = document.getElementById('scott-kpis');
+  if(!el) return;
+  const existing = document.getElementById('scott-dedup-warning');
+  if(existing) existing.remove();
+  if(dupes.length){
+    const w = document.createElement('div');
+    w.id = 'scott-dedup-warning';
+    w.style.cssText = 'grid-column: 1 / -1; background:#fdecec;border:1px solid #c24747;border-radius:8px;padding:10px 14px;font-size:12px;color:#c24747;font-weight:700;';
+    w.textContent = `⚠  ${dupes.length} account${dupes.length>1?'s':''} on BOTH today queues — coordinate before dialing: ${dupes.slice(0,3).join(' · ')}${dupes.length>3?` +${dupes.length-3} more`:''}`;
+    el.prepend(w);
+  }
 }
 
 function renderScottKpis(){
-  const p = _scottData.prospects;
-  const c = _scottData.commissions;
-  const called = _scottData.called;
+  const f = scottFiltered();
+  const p = f.prospects;
+  const c = f.commissions;
+  const called = f.called;
   const now = Date.now();
   const parseDate = s => { const d = new Date(s); return isNaN(d) ? null : d; };
   const totalProspects = p.length;
@@ -3766,7 +3804,7 @@ function renderScottKpis(){
 function renderScottPipeline(){
   const stages = ['New','Contacted','Meeting','Sample Requested','Order Written','Closed','Lost/Cold'];
   const counts = Object.fromEntries(stages.map(s => [s, 0]));
-  _scottData.prospects.forEach(r => { const s = r.Status || 'New'; if (counts[s] != null) counts[s]++; });
+  scottFiltered().prospects.forEach(r => { const s = r.Status || 'New'; if (counts[s] != null) counts[s]++; });
   const max = Math.max(1, ...Object.values(counts));
   const el = document.getElementById('scott-pipeline');
   el.innerHTML = stages.map(s => {
@@ -3782,7 +3820,7 @@ function renderScottPipeline(){
 }
 
 function renderScottActivity(){
-  const rows = [..._scottData.called].sort((a,b) => (b.Date||'').localeCompare(a.Date||'')).slice(0,20);
+  const rows = [...scottFiltered().called].sort((a,b) => (b.Date||'').localeCompare(a.Date||'')).slice(0,20);
   const el = document.getElementById('scott-activity');
   if (!rows.length){
     el.innerHTML = '<div style="padding:16px 18px;font-size:12px;color:var(--text3);">No calls logged yet.</div>';
@@ -3790,10 +3828,11 @@ function renderScottActivity(){
   }
   el.innerHTML = rows.map(r => {
     const outcomeColor = /order/i.test(r.Outcome) ? '#3a8b5c' : /meeting/i.test(r.Outcome) ? 'var(--gsw-gold)' : /voicemail|no answer/i.test(r.Outcome) ? 'var(--text3)' : 'var(--gsw-navy)';
+    const by = r['Called By'] || '';
     return `<div style="padding:10px 18px;border-bottom:1px solid var(--border);">
       <div style="display:flex;justify-content:space-between;gap:10px;">
         <div style="font-size:12px;font-weight:700;color:var(--text);">${escapeHTML(r.Account||'')}</div>
-        <div style="font-size:11px;color:var(--text3);white-space:nowrap;">${escapeHTML(r.Date||'')}</div>
+        <div style="font-size:11px;color:var(--text3);white-space:nowrap;">${escapeHTML(r.Date||'')}${by ? ' · ' + escapeHTML(by) : ''}</div>
       </div>
       <div style="font-size:11px;color:${outcomeColor};font-weight:600;margin-top:2px;">${escapeHTML(r.Outcome||'')}</div>
       ${r.Note ? `<div style="font-size:11px;color:var(--text2);margin-top:4px;line-height:1.5;">${escapeHTML(r.Note)}</div>` : ''}
@@ -3810,7 +3849,7 @@ function renderScottProspects(){
   }
   const wantStatus = filterEl.value;
   const q = (document.getElementById('scott-filter-search').value || '').trim().toLowerCase();
-  let rows = _scottData.prospects.slice();
+  let rows = scottFiltered().prospects.slice();
   if (wantStatus) rows = rows.filter(r => r.Status === wantStatus);
   if (q) rows = rows.filter(r => Object.values(r).join(' ').toLowerCase().includes(q));
 
@@ -3819,7 +3858,7 @@ function renderScottProspects(){
     el.innerHTML = '<div style="padding:16px 18px;font-size:12px;color:var(--text3);">No matches.</div>';
     return;
   }
-  const cols = ['Account','Type','City','State','Status','Contact','Phone','Last Contact','Next Action'];
+  const cols = ['Owner','Account','Type','City','State','Status','Contact','Phone','Last Contact','Next Action'];
   el.innerHTML = `<table style="width:100%;border-collapse:collapse;font-size:12px;">
     <thead><tr style="background:#faf7ee;">${cols.map(c => `<th style="text-align:left;padding:8px 10px;font-weight:700;color:var(--text2);font-size:10px;text-transform:uppercase;letter-spacing:0.08em;border-bottom:1px solid var(--border);">${c}</th>`).join('')}</tr></thead>
     <tbody>${rows.map(r => `<tr style="border-bottom:1px solid var(--border);">
@@ -3829,13 +3868,13 @@ function renderScottProspects(){
 }
 
 function renderScottCommissions(){
-  const rows = _scottData.commissions;
+  const rows = scottFiltered().commissions;
   const el = document.getElementById('scott-comm-table');
   if (!rows.length){
     el.innerHTML = '<div style="padding:16px 18px;font-size:12px;color:var(--text3);">No commissions logged yet.</div>';
     return;
   }
-  const cols = ['Close Date','Account','City','Order Total','Rate %','Commission $','Status','Payment Date','Notes'];
+  const cols = ['Close Date','Rep','Account','City','Order Total','Rate %','Commission $','Status','Payment Date','Notes'];
   const totals = { Pending: 0, Earned: 0, Paid: 0 };
   rows.forEach(r => {
     const amt = parseFloat(String(r['Commission $']||'').replace(/[$,]/g,'')) || 0;
