@@ -1387,6 +1387,12 @@ body { font-size: calc(14px * var(--gsw-font-scale)); }
         <div class="output-box" id="output-box">Select a tab and click Generate.</div>
         <button class="copy-btn" onclick="copyOutput()">Copy</button>
       </div>
+      <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap;">
+        <button class="gen-btn" style="background:#c5221f;color:#fff;flex:1;min-width:180px;" onclick="openOutreachInGmail()">✉ Open in Gmail</button>
+        <div style="font-size:11px;color:var(--text3);align-self:center;line-height:1.5;">
+          Generates the Email tab if not yet done. Uses your Gmail sign-in — you'll see it before sending.
+        </div>
+      </div>
     </div>
   </div>
 </div>
@@ -1433,7 +1439,7 @@ body { font-size: calc(14px * var(--gsw-font-scale)); }
 // ══ CONFIG ════════════════════════════════════════════════════════════════════
 const WORKER_URL   = 'https://bitter-pheasant-47.techhausinc1.deno.net';
 // Codes the LOCAL client gate accepts (UI access control — independent of the worker)
-const ACCESS_CODES = [];
+const ACCESS_CODES = ['va2025'];   // Vlad's VA (Philippines) — rep tier, sees only her own prospects/calls
 const MASTER_CODES = ['ivan2025','vlad2025','gscott2025'];  // All three equal — full access
 const DIRECTOR_CODES = [];
 // Code sent to the Deno worker — server-side whitelist is separate from local UI access.
@@ -1443,6 +1449,7 @@ const ROLE_MAP = {
   'ivan2025':   {name:'Ivan Svedov',      role:'master', title:'CEO · Heisenbug'},
   'vlad2025':   {name:'Vladimir Spivak',  role:'master', title:'Owner · Modern Line Furniture'},
   'gscott2025': {name:'G. Scott Waddell', role:'master', title:"Manufacturer's Rep · Dallas TX"},
+  'va2025':     {name:"Vlad's VA",        role:'rep',    title:'Sales Support · Philippines'},
 };
 const CACHE_KEY    = 'hh_last_scan';
 const PROSPECTS_KEY= 'hh_prospects';
@@ -2870,7 +2877,10 @@ function renderLeads(filter='all'){
               webHref = 'https://www.google.com/search?q=' + encodeURIComponent(nameQ + ' ' + addrQ);
             }
           }
+          // Gmail compose — Fred writes a Modern Line cold outreach on the fly
+          const gmailBtn = `<a class="act-btn" style="background:#c5221f;color:#fff;border-color:#c5221f;" onclick="event.stopPropagation();openGmailForLead('${enc}');return false;" href="#" title="Generate a Modern Line outreach email and open in Gmail">✉ Gmail</a>`;
           return (tel ? `<a class="act-btn" href="tel:${tel}">Call</a>` : '') +
+                 gmailBtn +
                  `<a class="act-btn" href="${mapsHref}" target="_blank" rel="noopener" title="Google Maps — real website + hours + reviews + directions">Maps</a>` +
                  (webHref ? `<a class="act-btn" href="${webHref}" target="_blank" rel="noopener" title="Open the listed website (falls back to Google search if URL is bad)">Website</a>` : '');
         })()}
@@ -3151,6 +3161,59 @@ function openOutreach(enc){
  document.getElementById('output-box').textContent='Select a tab and click Generate.';
  document.querySelectorAll('.modal-tab').forEach(t=>t.classList.toggle('active',t.dataset.tab==='email'));
  document.getElementById('outreach-overlay').classList.add('open');
+}
+// One-click Gmail: open the outreach modal, auto-generate the email tab, keep
+// the modal open so Scott can hit "Open in Gmail" once the draft renders.
+function openGmailForLead(enc){
+  openOutreach(enc);
+  // Fire the Generate button — kicks off the same Fred call as manual Generate
+  setTimeout(() => {
+    const btn = document.getElementById('gen-btn');
+    if(btn && !btn.disabled) btn.click();
+  }, 60);
+}
+// Take the currently-rendered email draft and open Gmail compose with it pre-filled.
+async function openOutreachInGmail(){
+  if(!currentLead){ showToast('Open a lead first','error'); return; }
+  // Ensure we're on the Email tab
+  if(currentTab !== 'email'){
+    currentTab = 'email';
+    document.querySelectorAll('.modal-tab').forEach(t => t.classList.toggle('active', t.dataset.tab === 'email'));
+  }
+  // If email tab hasn't been generated yet, generate now and wait
+  const outBox = document.getElementById('output-box');
+  if(!(outBox.dataset.raw || '').trim()){
+    await generateOutreach();
+  }
+  const raw = (outBox.dataset.raw || '').trim();
+  if(!raw){ showToast('Nothing to send yet — hit Generate first','error'); return; }
+  // Split subject vs body — the prompt says "Include subject line at top"
+  // so the first line is typically "Subject: XYZ"
+  let subject = '';
+  let body = raw;
+  const lines = raw.split(/\r?\n/);
+  const subMatch = lines[0].match(/^\s*Subject\s*[:\-]\s*(.+)$/i);
+  if(subMatch){
+    subject = subMatch[1].trim();
+    body = lines.slice(1).join('\n').replace(/^\s+/, '');
+  } else {
+    subject = `Modern Line Furniture — ${currentLead.name || 'your property'}`;
+  }
+  const email = String(currentLead.email || '').trim();
+  const url = 'https://mail.google.com/mail/?view=cm&fs=1'
+    + (email && /@/.test(email) ? '&to=' + encodeURIComponent(email) : '')
+    + '&su=' + encodeURIComponent(subject)
+    + '&body=' + encodeURIComponent(body);
+  window.open(url, '_blank', 'noopener');
+  // Log the outreach on the lead's notes for the audit trail
+  try {
+    const key = bizKey(currentLead);
+    const n = getNotes(key);
+    n.log = n.log || [];
+    const by = (window.currentUser && window.currentUser.name) || 'Rep';
+    n.log.push({ ts: new Date().toISOString().slice(0,16).replace('T',' '), text: 'Gmail draft opened — Modern Line outreach', outcome: 'Gmail draft opened', by });
+    setNotes(key, n);
+  } catch(_){}
 }
 document.getElementById('outreach-close').onclick=()=>document.getElementById('outreach-overlay').classList.remove('open');
 document.getElementById('outreach-overlay').onclick=e=>{if(e.target===document.getElementById('outreach-overlay'))document.getElementById('outreach-overlay').classList.remove('open');};
