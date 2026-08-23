@@ -1457,6 +1457,21 @@ const ROLE_MAP = {
   'gscott2025': {name:'G. Scott Waddell', role:'master', title:"Manufacturer's Rep · Dallas TX"},
   'va2025':     {name:"Vlad's VA",        role:'rep',    title:'Sales Support · Philippines'},
 };
+// GSW HQ API — real server-side persistence (2026-08-23), replacing what
+// used to be localStorage-only for commissions/prospects/called-log/
+// today-queue/comm-rates. Piggybacked on the shared igor-hq-worker under
+// /gsw/api/* the same way MLF/HempHaus/Kostya/Heisenbug/JMS are, cross-
+// origin (this page keeps deploying standalone at gsw-hq.techhausinc1.deno.net).
+const GSW_API = 'https://igor-hq.techhausinc1.deno.net/gsw/api';
+let gswToken = '';
+let gswSynced = false;   // true once a real server round-trip has succeeded this session
+async function gswApi(path, opts={}){
+  const headers = Object.assign({'Content-Type':'application/json'}, opts.headers||{});
+  if(gswToken) headers['Authorization'] = 'Bearer ' + gswToken;
+  const res = await fetch(GSW_API + path, Object.assign({}, opts, {headers}));
+  if(!res.ok) throw new Error('gsw api ' + path + ' -> ' + res.status);
+  return res.json();
+}
 const CACHE_KEY    = 'hh_last_scan';
 const PROSPECTS_KEY= 'hh_prospects';
 
@@ -1755,10 +1770,26 @@ function loadTodayState(){
  try{ commissions = JSON.parse(localStorage.getItem(COMM_KEY)||'[]'); }catch(e){ commissions=[]; }
  try{ commRates = JSON.parse(localStorage.getItem(COMM_RATES_KEY)||'{}'); }catch(e){ commRates={}; }
 }
-function saveTodayQueue(){ localStorage.setItem(TODAY_KEY, JSON.stringify(todayQueue)); refreshTodayBadge(); }
-function saveCalledLog(){ localStorage.setItem(CALLED_KEY, JSON.stringify({day:todayDateStamp(), entries:calledLog})); refreshCalledBadge(); }
-function saveCommissions(){ localStorage.setItem(COMM_KEY, JSON.stringify(commissions)); }
-function saveCommRates(){ localStorage.setItem(COMM_RATES_KEY, JSON.stringify(commRates)); }
+// Each save writes localStorage first (instant, works offline) then pushes
+// to the server in the background so Scott/Vlad/the VA see each other's
+// changes. A failed push just gets picked up by the next successful save or
+// the next login's /state fetch -- never blocks the UI on network latency.
+function saveTodayQueue(){
+  localStorage.setItem(TODAY_KEY, JSON.stringify(todayQueue)); refreshTodayBadge();
+  if(gswToken) gswApi('/todayqueue', {method:'PUT', body:JSON.stringify({queue:todayQueue})}).catch(e=>console.warn('gsw sync (todayqueue):', e));
+}
+function saveCalledLog(){
+  localStorage.setItem(CALLED_KEY, JSON.stringify({day:todayDateStamp(), entries:calledLog})); refreshCalledBadge();
+  if(gswToken) gswApi('/calledlog', {method:'PUT', body:JSON.stringify({day:todayDateStamp(), entries:calledLog})}).catch(e=>console.warn('gsw sync (calledlog):', e));
+}
+function saveCommissions(){
+  localStorage.setItem(COMM_KEY, JSON.stringify(commissions));
+  if(gswToken) gswApi('/commissions', {method:'PUT', body:JSON.stringify({commissions})}).catch(e=>console.warn('gsw sync (commissions):', e));
+}
+function saveCommRates(){
+  localStorage.setItem(COMM_RATES_KEY, JSON.stringify(commRates));
+  if(gswToken) gswApi('/commrates', {method:'PUT', body:JSON.stringify({rates:commRates})}).catch(e=>console.warn('gsw sync (commrates):', e));
+}
 
 function refreshTodayBadge(){ const el=document.getElementById('today-count'); if(el) el.textContent=todayQueue.length; }
 function refreshCalledBadge(){ const el=document.getElementById('called-count'); if(el) el.textContent=calledLog.length; }
@@ -1776,10 +1807,62 @@ function userBonusPct(code){
 }
 function fmtMoney(n){ return '$'+Number(n||0).toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g,','); }
 
+// One-time push of this browser's pre-existing localStorage data into the
+// server, guarded so it only ever runs once per browser. Safe to call even
+// if another browser already migrated -- the server merges additively
+// (see gswMigrateSnapshot in the worker), it never overwrites.
+async function gswMigrateIfNeeded(){
+  if(localStorage.getItem('gsw_migrated_v1')) return;
+  let calledHistory=[];
+  try{ calledHistory = JSON.parse(localStorage.getItem('hh_called_history')||'[]'); }catch(e){}
+  let calledLogRaw={day:'',entries:[]};
+  try{ calledLogRaw = JSON.parse(localStorage.getItem(CALLED_KEY)||'{"day":"","entries":[]}'); }catch(e){}
+  const snapshot = {
+    prospects: (()=>{ try{return JSON.parse(localStorage.getItem(PROSPECTS_KEY)||'{}');}catch(e){return{};} })(),
+    commissions: (()=>{ try{return JSON.parse(localStorage.getItem(COMM_KEY)||'[]');}catch(e){return[];} })(),
+    calledLog: calledLogRaw,
+    calledHistory,
+    todayQueue: (()=>{ try{return JSON.parse(localStorage.getItem(TODAY_KEY)||'[]');}catch(e){return[];} })(),
+    commRates: (()=>{ try{return JSON.parse(localStorage.getItem(COMM_RATES_KEY)||'{}');}catch(e){return{};} })(),
+  };
+  try{
+    await gswApi('/migrate', {method:'POST', body:JSON.stringify(snapshot)});
+    localStorage.setItem('gsw_migrated_v1','1');
+  }catch(e){
+    console.warn('GSW migrate skipped (will retry next login):', e);
+  }
+}
+
+// Real server round-trip: login for a bearer token, migrate this browser's
+// local data up once, then pull the authoritative merged state down.
+// Falls back to whatever loadProspects()/loadTodayState() already loaded
+// from localStorage if the server is unreachable -- never blocks the app.
+async function gswSyncFromServer(code){
+  try{
+    const loginRes = await gswApi('/login', {method:'POST', body:JSON.stringify({code})});
+    gswToken = loginRes.token;
+    await gswMigrateIfNeeded();
+    const state = await gswApi('/state');
+    prospects = state.prospects || {};
+    commissions = state.commissions || [];
+    todayQueue = state.todayQueue || [];
+    commRates = state.commRates || {};
+    calledLog = (state.calledToday && state.calledToday.entries) || [];
+    localStorage.setItem(PROSPECTS_KEY, JSON.stringify(prospects));
+    localStorage.setItem(COMM_KEY, JSON.stringify(commissions));
+    localStorage.setItem(TODAY_KEY, JSON.stringify(todayQueue));
+    localStorage.setItem(COMM_RATES_KEY, JSON.stringify(commRates));
+    localStorage.setItem(CALLED_KEY, JSON.stringify({day:todayDateStamp(), entries:calledLog}));
+    gswSynced = true;
+  }catch(e){
+    console.warn('GSW server sync failed, using local data only:', e);
+    if(typeof showToast==='function') showToast('Offline — showing this device\'s last saved data', 'error');
+  }
+}
 
 // ══ GATE ══════════════════════════════════════════════════════════════════════
 document.getElementById('access-input').addEventListener('keydown',e=>{if(e.key==='Enter')checkAccess();});
-function checkAccess(){
+async function checkAccess(){
  const val=document.getElementById('access-input').value.trim().toLowerCase();
  if(ALL_CODES.map(c=>c.toLowerCase()).includes(val)){
  accessCode=val;
@@ -1791,6 +1874,7 @@ function checkAccess(){
     // Show user badge
  document.getElementById('user-badge-name').textContent=userInfo.name+' ✓';
  document.getElementById('user-badge-role').textContent=userInfo.title;
+ await gswSyncFromServer(val);
     // Visibility tiers:
     // master   → all tabs, master-only widgets (financials, internal ops) visible
     // director → all tabs visible too, but UI defaults to the sales workspace (Prospects), not business side
@@ -2681,6 +2765,7 @@ function loadProspects(){
 function saveProspects(){
  localStorage.setItem(PROSPECTS_KEY,JSON.stringify(prospects));
  updateProspectCount();
+ if(gswToken) gswApi('/prospects', {method:'PUT', body:JSON.stringify({prospects})}).catch(e=>console.warn('gsw sync (prospects):', e));
 }
 function updateProspectCount(){
  const n=Object.keys(prospects).length;
