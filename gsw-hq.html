@@ -1824,6 +1824,7 @@ async function gswMigrateIfNeeded(){
     calledHistory,
     todayQueue: (()=>{ try{return JSON.parse(localStorage.getItem(TODAY_KEY)||'[]');}catch(e){return[];} })(),
     commRates: (()=>{ try{return JSON.parse(localStorage.getItem(COMM_RATES_KEY)||'{}');}catch(e){return{};} })(),
+    scottUrls: (()=>{ try{return JSON.parse(localStorage.getItem(SCOTT_URLS_KEY)||'{}');}catch(e){return{};} })(),
   };
   try{
     await gswApi('/migrate', {method:'POST', body:JSON.stringify(snapshot)});
@@ -1853,6 +1854,15 @@ async function gswSyncFromServer(code){
     localStorage.setItem(TODAY_KEY, JSON.stringify(todayQueue));
     localStorage.setItem(COMM_RATES_KEY, JSON.stringify(commRates));
     localStorage.setItem(CALLED_KEY, JSON.stringify({day:todayDateStamp(), entries:calledLog}));
+    // Scott's sheet URLs: server is authoritative once it has anything saved
+    // (another master already configured it on a different device). If the
+    // server is still empty, keep whatever this browser already had locally
+    // -- gswMigrateIfNeeded() above will have offered to seed the server
+    // with it moments ago.
+    const su = state.scottUrls || {};
+    if(su.prospects || su.called || su.commissions){
+      localStorage.setItem(SCOTT_URLS_KEY, JSON.stringify(su));
+    }
     gswSynced = true;
   }catch(e){
     console.warn('GSW server sync failed, using local data only:', e);
@@ -3688,7 +3698,16 @@ let _scottData = { prospects: [], called: [], commissions: [], fetchedAt: 0 };
 function getScottUrls(){
   try { return JSON.parse(localStorage.getItem(SCOTT_URLS_KEY) || '{}'); } catch(_) { return {}; }
 }
-function saveScottUrls(u){ localStorage.setItem(SCOTT_URLS_KEY, JSON.stringify(u)); }
+function saveScottUrls(u){
+  localStorage.setItem(SCOTT_URLS_KEY, JSON.stringify(u));
+  // Push to server so every master (Ivan/Vlad/Scott) sees the same Team
+  // Activity config without each having to paste the sheet links again on
+  // their own device. Server enforces master-only; a rep token just 403s
+  // silently here (reps can't reach Team Activity's Settings button anyway).
+  if(typeof gswToken !== 'undefined' && gswToken){
+    gswApi('/scotturls', {method:'PUT', body:JSON.stringify({urls:u})}).catch(e=>console.warn('gsw sync (scotturls):', e));
+  }
+}
 
 function openScottSettings(){
   const u = getScottUrls();
